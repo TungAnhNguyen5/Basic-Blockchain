@@ -1,0 +1,3 @@
+/home/Basic-Blockchain/build/CMakeFiles/blockchain.dir
+/home/Basic-Blockchain/build/CMakeFiles/edit_cache.dir
+/home/Basic-Blockchain/build/CMakeFiles/rebuild_cache.dir

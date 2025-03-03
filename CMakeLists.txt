@@ -28,9 +28,12 @@ endif()
 
 if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
     set(CHECK_LIBRARY ${CMAKE_SOURCE_DIR}/lib/libcheck-aarch64.so)
+elseif (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
+    set(CHECK_LIBRARY ${CMAKE_SOURCE_DIR}/lib/libcheck-x86_64.so)
 else()
     message(FATAL_ERROR "Unsupported architecture: ${CMAKE_SYSTEM_PROCESSOR}")
 endif()
+
 
 target_link_libraries(blockchain OpenSSL::Crypto ${CHECK_LIBRARY})
 
