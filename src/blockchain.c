@@ -18,6 +18,7 @@ struct mining_args {
   uint32_t *result_nonce;
   int thread_id;
   volatile int *found;
+  pthread_mutex_t *mutex;  // Added mutex for thread synchronization
 };
 
 int bc_init(struct blockchain *bc,
@@ -25,7 +26,7 @@ int bc_init(struct blockchain *bc,
   if (!bc || !difficulty)
     return -1;
 
-  memset(bc, 0, sizeof(struct blockchain));
+  memset(bc, 0, sizeof(struct blockchain));  // This properly zeros bc->count
   memcpy(bc->difficulty, difficulty, SHA256_DIGEST_LENGTH);
   return 0;
 }
@@ -54,14 +55,14 @@ int bc_verify(struct blockchain *bc) {
 bool is_hash_valid(const unsigned char *hash, const unsigned char *difficulty) {
   for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
     if (hash[i] < difficulty[i]) {
-      return true;
+      return true;  // Hash is smaller, so it meets the difficulty
     } else if (hash[i] > difficulty[i]) {
-      return false;
+      return false;  // Hash is larger, so it doesn't meet the difficulty
     }
+    // If equal, continue to next byte
   }
-  return true;
+  return true;  // All bytes are equal, so hash meets difficulty
 }
-
 void *mine_block(void *arg) {
   struct mining_args *args = (struct mining_args *)arg;
   struct block_core local_core = args->core;
@@ -69,16 +70,36 @@ void *mine_block(void *arg) {
   uint32_t nonce = args->thread_id;
   const unsigned char *difficulty = args->difficulty;
 
-  while (!(*args->found) && nonce < UINT_MAX) {
+  while (1) {
+    // Periodically check if another thread found a solution
+    if ((nonce % 1000) == 0) {
+      pthread_mutex_lock(args->mutex);
+      if (*args->found) {
+        pthread_mutex_unlock(args->mutex);
+        break;
+      }
+      pthread_mutex_unlock(args->mutex);
+    }
+    
+    // Check for overflow
+    if (UINT_MAX - NUM_THREADS < nonce) {
+      break;
+    }
+    
     local_core.nonce = nonce;
     SHA256((unsigned char *)&local_core, sizeof(local_core), local_hash);
 
     if (is_hash_valid(local_hash, difficulty)) {
-      memcpy(args->result_hash, local_hash, SHA256_DIGEST_LENGTH);
-      *args->result_nonce = nonce;
-      *args->found = 1;
+      pthread_mutex_lock(args->mutex);
+      if (!(*args->found)) {
+        memcpy(args->result_hash, local_hash, SHA256_DIGEST_LENGTH);
+        *args->result_nonce = nonce;
+        *args->found = 1;
+      }
+      pthread_mutex_unlock(args->mutex);
       break;
     }
+    
     nonce += NUM_THREADS;
   }
   return NULL;
@@ -107,6 +128,8 @@ int bc_add_block(struct blockchain *bc, const unsigned char data[DATA_SIZE]) {
   unsigned char result_hash[SHA256_DIGEST_LENGTH];
   uint32_t result_nonce = 0;
   volatile int found = 0;
+  pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+  int thread_created[NUM_THREADS] = {0};  // Track which threads were created
 
   for (int i = 0; i < NUM_THREADS; i++) {
     args[i].core = *core;
@@ -115,17 +138,28 @@ int bc_add_block(struct blockchain *bc, const unsigned char data[DATA_SIZE]) {
     args[i].result_nonce = &result_nonce;
     args[i].thread_id = i;
     args[i].found = &found;
+    args[i].mutex = &mutex;  // Pass the mutex to each thread
   }
 
   for (int i = 0; i < NUM_THREADS; i++) {
     if (pthread_create(&threads[i], NULL, mine_block, &args[i]) != 0) {
+      // Clean up already created threads if creation fails
+      for (int j = 0; j < i; j++) {
+        pthread_join(threads[j], NULL);
+      }
+      pthread_mutex_destroy(&mutex);
       return -1;
     }
+    thread_created[i] = 1;
   }
 
+  // Join all threads
   for (int i = 0; i < NUM_THREADS; i++) {
     pthread_join(threads[i], NULL);
   }
+
+  // Clean up synchronization resources
+  pthread_mutex_destroy(&mutex);
 
   if (!found) {
     return -1;
